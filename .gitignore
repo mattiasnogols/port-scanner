@@ -1,0 +1,7 @@
+REQUIREMENTS.md
+TASK.md
+PLAN.md
+tests/
+STATUS.md
+__pycache__/
+*.py[cod]
