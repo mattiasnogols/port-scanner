@@ -1,11 +1,15 @@
 """UDP scan (-udp)
+
 no handshake, no acknowledgment. ICMP is the only signal:
 
     ICMP port-unreachable (type 3, code 3) -> Closed
     any UDP reply                          -> Open
-    silence within the timeout             -> Open|Filtered
+    silence within the timeout             -> Open|Filtered (open, or firewall dropped)
 
-Needs root at runtime"""
+Needs root at runtime
+
+Interface (see scanner/scanners/__init__.py):
+"""
 
 import selectors
 import socket
@@ -17,27 +21,28 @@ from scanner.scanners import NeedsRootError
 
 OPEN = "Open"
 CLOSED = "Closed"
-OPEN_FILTERED = "Open|Filtered" 
+OPEN_FILTERED = "Open|Filtered"
 
-# UDP is slower than TCP
+# Per-port timeout in seconds
+# too short misses slow replies, too long and firewalled ranges take forever.
 DEFAULT_TIMEOUT = 2.0
 
 IPPROTO_UDP = 17
 ICMP_DEST_UNREACH = 3
 
-# Minimal DNS query for "example.com" (type A): empty may be ignored so a custom reply from port 53
+# Ports that need a question before they answer;
 DNS_PROBE = (
     b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"  # id, flags, counts
     b"\x07example\x03com\x00"                            # QNAME
     b"\x00\x01\x00\x01"                                  # QTYPE=A, QCLASS=IN
 )
 
-# port 53 payload; everything else empty.
 PAYLOADS = {53: DNS_PROBE}
 
 
 class IcmpPacket(NamedTuple):
-    """ICMP type/code, plus any UDP ports quoted by an unreachable."""
+    """Decoded ICMP header: type and code always; ports only when the
+    packet is a destination-unreachable quoting a UDP datagram."""
     type: int
     code: int
     src_port: Optional[int]
@@ -45,8 +50,11 @@ class IcmpPacket(NamedTuple):
 
 
 def parse_icmp(data: bytes) -> IcmpPacket:
-    """ValueError if the packet is too short for IP + ICMP headers."""
-    if len(data) < 28:  # minimum IPv4 + ICMP header
+    """Pull (type, code, embedded UDP ports) out of a raw packet.
+
+    Raises ValueError if the packet is too short for IP + ICMP headers.
+    """
+    if len(data) < 28:  # minimum IPv4 header + ICMP header
         raise ValueError(f"packet too short: {len(data)} bytes")
     ihl = (data[0] & 0x0F) * 4
     icmp_at = ihl + 8
@@ -58,7 +66,8 @@ def parse_icmp(data: bytes) -> IcmpPacket:
 
     src_port = dst_port = None
     if icmp_type == ICMP_DEST_UNREACH and len(data) >= icmp_at + 20:
-        # IP header followed by 8+ payload bytes, with the UDP ports in the first 4.
+        # An unreachable quotes the datagram that caused it: its IP header
+        # (options included) plus 8+ bytes, the first 4 being the UDP ports.
         inner = icmp_at
         udp_at = inner + (data[inner] & 0x0F) * 4
         if data[inner + 9] == IPPROTO_UDP and len(data) >= udp_at + 4:
@@ -78,6 +87,7 @@ def scan_port(ip: str, port: int, timeout: float = DEFAULT_TIMEOUT) -> str:
         icmp = socket.socket(socket.AF_INET, socket.SOCK_RAW,
                              socket.IPPROTO_ICMP)
     except PermissionError as exc:
+        # Raw sockets are root-only
         raise NeedsRootError("UDP scan requires root (try sudo)") from exc
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sel = selectors.DefaultSelector()
@@ -94,6 +104,7 @@ def scan_port(ip: str, port: int, timeout: float = DEFAULT_TIMEOUT) -> str:
             remaining = deadline - time.monotonic()
             ready = sel.select(remaining) if remaining > 0 else []
             if not ready:
+                # Full timeout with no signal
                 return OPEN_FILTERED
             for sock, _ in ready:
                 if sock is probe:
@@ -107,9 +118,6 @@ def scan_port(ip: str, port: int, timeout: float = DEFAULT_TIMEOUT) -> str:
 
 
 def _is_our_port_unreachable(icmp, ip: str, src_port: int, port: int) -> bool:
-    """True if the next queued ICMP packet is a port-unreachable (3/3) from
-    the target quoting our probe's ports. Raw sockets see all ICMP, so
-    peer IP + quoted ports are the match; anything else is ignored."""
     try:
         data, peer = icmp.recvfrom(65535)
     except OSError:
