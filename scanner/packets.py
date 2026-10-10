@@ -3,6 +3,7 @@
 import random
 import socket
 import struct
+from typing import NamedTuple
 
 # TCP flag bits; SYN|ACK = 0x12 is the Open reply
 SYN = 0x02
@@ -54,3 +55,23 @@ def random_source_port() -> int:
 def random_seq() -> int:
     """Unpredictable initial sequence number (RFC 793)."""
     return random.randint(0, 0xFFFFFFFF)
+
+
+class TcpReply(NamedTuple):
+    """Decoded fields"""
+    ttl: int
+    window: int
+    flags: int
+
+
+def parse_reply(data: bytes) -> TcpReply:
+    """ValueError if the packet lacks a full IP + 20-byte TCP header."""
+    if len(data) < 20:
+        raise ValueError(f"packet too short: {len(data)} bytes")
+    ihl = (data[0] & 0x0F) * 4  # parse IHL
+    if len(data) < ihl + 20:
+        raise ValueError(f"truncated TCP header in {len(data)}-byte packet")
+    ttl = data[8]                             # IP header byte 8
+    flags = data[ihl + 13]
+    (window,) = struct.unpack_from("!H", data, ihl + 14)
+    return TcpReply(ttl, window, flags)
