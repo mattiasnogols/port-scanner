@@ -3,3 +3,7 @@
     udp.py           UDP + ICMP probe scan   (-udp)
     syn.py           stealth SYN scan        (-s)
 """
+
+
+class NeedsRootError(Exception):
+    """Raw-socket scan attempted without root privileges"""

@@ -7,8 +7,13 @@ no handshake, no acknowledgment. ICMP is the only signal:
 
 Needs root at runtime"""
 
+import selectors
+import socket
 import struct
+import time
 from typing import NamedTuple, Optional
+
+from scanner.scanners import NeedsRootError
 
 OPEN = "Open"
 CLOSED = "Closed"
@@ -60,3 +65,60 @@ def parse_icmp(data: bytes) -> IcmpPacket:
             src_port, dst_port = struct.unpack_from("!HH", data, udp_at)
 
     return IcmpPacket(icmp_type, icmp_code, src_port, dst_port)
+
+
+def scan_port(ip: str, port: int, timeout: float = DEFAULT_TIMEOUT) -> str:
+    """Probe UDP port: OPEN, CLOSED, or OPEN_FILTERED.
+
+    Watch two sockets until the deadline: raw ICMP (port-unreachable
+    quoting our probe -> Closed) and the UDP probe socket (any reply ->
+    Open). Silence -> Open|Filtered. Needs root for the raw socket.
+    """
+    try:
+        icmp = socket.socket(socket.AF_INET, socket.SOCK_RAW,
+                             socket.IPPROTO_ICMP)
+    except PermissionError as exc:
+        raise NeedsRootError("UDP scan requires root (try sudo)") from exc
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sel = selectors.DefaultSelector()
+    try:
+        try:
+            probe.sendto(PAYLOADS.get(port, b""), (ip, port))
+        except OSError:
+            return OPEN_FILTERED
+        src_port = probe.getsockname()[1]
+        sel.register(probe, selectors.EVENT_READ)
+        sel.register(icmp, selectors.EVENT_READ)
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            ready = sel.select(remaining) if remaining > 0 else []
+            if not ready:
+                return OPEN_FILTERED
+            for sock, _ in ready:
+                if sock is probe:
+                    return OPEN
+                if _is_our_port_unreachable(icmp, ip, src_port, port):
+                    return CLOSED
+    finally:
+        sel.close()
+        probe.close()
+        icmp.close()
+
+
+def _is_our_port_unreachable(icmp, ip: str, src_port: int, port: int) -> bool:
+    """True if the next queued ICMP packet is a port-unreachable (3/3) from
+    the target quoting our probe's ports. Raw sockets see all ICMP, so
+    peer IP + quoted ports are the match; anything else is ignored."""
+    try:
+        data, peer = icmp.recvfrom(65535)
+    except OSError:
+        return False
+    if peer[0] != ip:
+        return False
+    try:
+        pkt = parse_icmp(data)
+    except ValueError:
+        return False
+    return (pkt.type == ICMP_DEST_UNREACH and pkt.code == 3
+            and (pkt.src_port, pkt.dst_port) == (src_port, port))

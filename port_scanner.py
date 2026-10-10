@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """
-Exit codes: 0 = success (including --help), 2 = usage error,
-3 = scan type not implemented yet.
+Exit codes: 0 = success (including --help), 1 = runtime error (needs root),
+2 = usage error, 3 = scan type not implemented yet.
 """
 
 import sys
 from typing import List, Optional
 
 from scanner.cli import USAGE, CliError, Config, ShowHelp, parse_args
-from scanner.scanners import tcp_connect
+from scanner.scanners import NeedsRootError, tcp_connect, udp
 
 EXIT_OK = 0
+EXIT_RUNTIME = 1
 EXIT_USAGE = 2
 EXIT_UNIMPLEMENTED = 3
 
-SCANNER_MODULES = {"tcp": tcp_connect}
+SCANNER_MODULES = {"tcp": tcp_connect, "udp": udp}
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -40,9 +41,13 @@ def _run(config: Config) -> int:
               file=sys.stderr)
         return EXIT_UNIMPLEMENTED
     print(f"Scanning {config.target}...")
-    for port in config.ports:
-        state = module.scan_port(config.target, port)
-        print(f"Port {port}: {state}")
+    try:
+        for port in config.ports:
+            state = module.scan_port(config.target, port)
+            print(f"Port {port}: {state}")
+    except NeedsRootError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
     return EXIT_OK
 
 
