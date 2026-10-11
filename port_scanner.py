@@ -8,14 +8,14 @@ import sys
 from typing import List, Optional
 
 from scanner.cli import USAGE, CliError, Config, ShowHelp, parse_args
-from scanner.scanners import NeedsRootError, tcp_connect, udp
+from scanner.scanners import NeedsRootError, syn, tcp_connect, udp
 
 EXIT_OK = 0
 EXIT_RUNTIME = 1
 EXIT_USAGE = 2
 EXIT_UNIMPLEMENTED = 3
 
-SCANNER_MODULES = {"tcp": tcp_connect, "udp": udp}
+SCANNER_MODULES = {"tcp": tcp_connect, "udp": udp, "syn": syn}
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -40,7 +40,9 @@ def _run(config: Config) -> int:
         print(f"Error: scan not implemented",
               file=sys.stderr)
         return EXIT_UNIMPLEMENTED
-    print(f"Scanning {config.target}...")
+    # stealth scan
+    label = " (stealth)" if config.scan_type == "syn" else ""
+    print(f"Scanning{label} {config.target}...")
     try:
         for port in config.ports:
             state = module.scan_port(config.target, port)
