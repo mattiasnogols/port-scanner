@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""
+"""Port scanner entry: parse arguments, print results.
+
 Exit codes: 0 = success (including --help), 1 = runtime error (needs root),
 2 = usage error, 3 = scan type not implemented yet.
 """
@@ -19,7 +20,7 @@ SCANNER_MODULES = {"tcp": tcp_connect, "udp": udp, "syn": syn}
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """Parse *argv* and run the scan."""
+    """Parse argv and run the scan."""
     argv = sys.argv[1:] if argv is None else list(argv)
     try:
         config = parse_args(argv)
@@ -34,13 +35,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 def _run(config: Config) -> int:
-    """Sequential execution"""
+    """Scan the requested ports and print each state."""
     module = SCANNER_MODULES.get(config.scan_type)
     if module is None:
-        print(f"Error: scan not implemented",
-              file=sys.stderr)
+        # parse_args only for known scan type.
+        print("Error: scan not implemented", file=sys.stderr)
         return EXIT_UNIMPLEMENTED
-    # stealth scan
+    # The stealth scan is the only one tagged in the header
     label = " (stealth)" if config.scan_type == "syn" else ""
     print(f"Scanning{label} {config.target}...")
     try:
