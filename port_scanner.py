@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Port scanner entry: parse arguments, print results.
 
-Exit codes: 0 = success (including --help), 1 = runtime error (needs root),
-2 = usage error, 3 = scan type not implemented yet.
+Exit codes: 0 = success (including --help), 1 = runtime error (needs root,
+unwritable -f file), 2 = usage error, 3 = scan type not implemented yet.
 """
 
 import sys
 from typing import List, Optional
 
 from scanner.cli import USAGE, CliError, Config, ShowHelp, parse_args
+from scanner.output import OutputError, report
 from scanner.scanners import NeedsRootError, syn, tcp_connect, udp
 
 EXIT_OK = 0
@@ -35,20 +36,23 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 def _run(config: Config) -> int:
-    """Scan the requested ports and print each state."""
+    """Scan the requested ports, then render everything via output.report.
+
+    Scanning and reporting are separate jobs.
+    """
     module = SCANNER_MODULES.get(config.scan_type)
     if module is None:
         # parse_args only for known scan type.
         print("Error: scan not implemented", file=sys.stderr)
         return EXIT_UNIMPLEMENTED
-    # The stealth scan is the only one tagged in the header
-    label = " (stealth)" if config.scan_type == "syn" else ""
-    print(f"Scanning{label} {config.target}...")
     try:
-        for port in config.ports:
-            state = module.scan_port(config.target, port)
-            print(f"Port {port}: {state}")
+        results = {port: module.scan_port(config.target, port)
+                   for port in config.ports}
+        report(config.target, config.scan_type, results, config.outfile)
     except NeedsRootError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+    except OutputError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return EXIT_RUNTIME
     return EXIT_OK
