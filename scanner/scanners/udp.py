@@ -3,7 +3,7 @@
 no handshake, no acknowledgment. ICMP is the only signal:
 
     ICMP port-unreachable (type 3, code 3) -> Closed
-    any UDP reply                          -> Open
+    UDP reply from the target              -> Open
     silence within the timeout             -> Open|Filtered (open, or firewall dropped)
 
 Needs root at runtime
@@ -85,8 +85,9 @@ def scan_port(ip: str, port: int, timeout: float = DEFAULT_TIMEOUT) -> str:
     """Probe UDP port: OPEN, CLOSED, or OPEN_FILTERED.
 
     Watch two sockets until the deadline: raw ICMP (port-unreachable
-    quoting our probe -> Closed) and the UDP probe socket (any reply ->
-    Open). Silence -> Open|Filtered. Needs root for the raw socket.
+    quoting our probe -> Closed) and the UDP probe socket (a datagram
+    from the target -> Open; ECONNREFUSED -> Closed). Silence ->
+    Open|Filtered. Needs root for the raw socket.
     """
     try:
         icmp = socket.socket(socket.AF_INET, socket.SOCK_RAW,
@@ -113,8 +114,15 @@ def scan_port(ip: str, port: int, timeout: float = DEFAULT_TIMEOUT) -> str:
                 return OPEN_FILTERED
             for sock, _ in ready:
                 if sock is probe:
-                    return OPEN
-                if _is_our_port_unreachable(icmp, ip, src_port, port):
+                    try:
+                        _, peer = probe.recvfrom(65535)
+                    except ConnectionRefusedError:
+                        return CLOSED  # ICMP port-unreachable as socket error
+                    except OSError:
+                        continue  # wait out the deadline
+                    if peer[0] == ip:
+                        return OPEN
+                elif _is_our_port_unreachable(icmp, ip, src_port, port):
                     return CLOSED
     finally:
         sel.close()
