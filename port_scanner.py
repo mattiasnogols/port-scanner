@@ -4,6 +4,7 @@
 import sys
 from typing import List, Optional
 
+from scanner import parallel
 from scanner.cli import USAGE, CliError, Config, ShowHelp, parse_args
 from scanner.output import OutputError, report
 from scanner.scanners import NeedsRootError, syn, tcp_connect, udp
@@ -47,9 +48,15 @@ def _run(config: Config) -> int:
         print("Error: scan not implemented", file=sys.stderr)
         return EXIT_UNIMPLEMENTED
     try:
-        results = {port: module.scan_port(config.target, port)
-                   for port in config.ports}
+        results = parallel.scan_ports(module.scan_port, config.target,
+                                      config.ports)
         report(config.target, config.scan_type, results, config.outfile)
+    except parallel.ScanInterrupted as exc:
+        # Ctrl+C mid-scan: render whatever finished
+        if not exc.results:
+            raise
+        report(config.target, config.scan_type, exc.results, config.outfile)
+        return EXIT_RUNTIME
     except NeedsRootError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return EXIT_RUNTIME
