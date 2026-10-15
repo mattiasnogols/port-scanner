@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Port scanner entry: parse arguments, print results.
-
-Exit codes: 0 = success (including --help), 1 = runtime error (needs root,
-unwritable -f file), 2 = usage error, 3 = scan type not implemented yet.
-"""
+"""Port scanner entry: parse arguments, print results."""
 
 import sys
 from typing import List, Optional
@@ -16,6 +12,7 @@ EXIT_OK = 0
 EXIT_RUNTIME = 1
 EXIT_USAGE = 2
 EXIT_UNIMPLEMENTED = 3
+EXIT_INTERRUPT = 130
 
 SCANNER_MODULES = {"tcp": tcp_connect, "udp": udp, "syn": syn}
 
@@ -24,15 +21,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     """Parse argv and run the scan."""
     argv = sys.argv[1:] if argv is None else list(argv)
     try:
-        config = parse_args(argv)
-    except ShowHelp:
-        print(USAGE)
-        return EXIT_OK
-    except CliError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        print(USAGE, file=sys.stderr)
-        return EXIT_USAGE
-    return _run(config)
+        try:
+            config = parse_args(argv)
+        except ShowHelp:
+            print(USAGE)
+            return EXIT_OK
+        except CliError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            print(USAGE, file=sys.stderr)
+            return EXIT_USAGE
+        return _run(config)
+    except KeyboardInterrupt:
+        print("\nInterrupted", file=sys.stderr)
+        return EXIT_INTERRUPT
 
 
 def _run(config: Config) -> int:

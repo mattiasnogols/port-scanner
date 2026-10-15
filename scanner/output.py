@@ -33,6 +33,11 @@ def format_file_body(lines: List[str], when: Optional[datetime] = None) -> str:
 
 
 def save_results(name: str, lines: List[str]) -> str:
+    # A trailing separator (or . / ..) names a directory, not a file: fail this immediately.
+    if name in (".", "..") or name.endswith(os.sep):
+        raise OutputError(
+            f"cannot write result file '{name}': not a file path"
+        )
     body = format_file_body(lines)
     stem, ext = os.path.splitext(name)
     counter = 0
