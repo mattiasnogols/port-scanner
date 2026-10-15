@@ -50,13 +50,18 @@ class IcmpPacket(NamedTuple):
 
 
 def parse_icmp(data: bytes) -> IcmpPacket:
-    """Pull (type, code, embedded UDP ports) out of a raw packet.
+    """type, code, embedded UDP ports out of a raw packet.
 
-    Raises ValueError if the packet is too short for IP + ICMP headers.
+    Raises ValueError if the packet is too short for IP + ICMP headers
+    or a malformed IP header length.
     """
     if len(data) < 28:  # minimum IPv4 header + ICMP header
         raise ValueError(f"packet too short: {len(data)} bytes")
     ihl = (data[0] & 0x0F) * 4
+    if ihl < 20:
+        raise ValueError(
+            f"invalid IP header length {ihl} in {len(data)}-byte packet"
+        )
     icmp_at = ihl + 8
     if len(data) < icmp_at:
         raise ValueError(f"truncated ICMP header in {len(data)}-byte packet")
@@ -66,11 +71,11 @@ def parse_icmp(data: bytes) -> IcmpPacket:
 
     src_port = dst_port = None
     if icmp_type == ICMP_DEST_UNREACH and len(data) >= icmp_at + 20:
-        # An unreachable quotes the datagram that caused it: its IP header
-        # (options included) plus 8+ bytes, the first 4 being the UDP ports.
         inner = icmp_at
-        udp_at = inner + (data[inner] & 0x0F) * 4
-        if data[inner + 9] == IPPROTO_UDP and len(data) >= udp_at + 4:
+        inner_ihl = (data[inner] & 0x0F) * 4
+        udp_at = inner + inner_ihl
+        if (inner_ihl >= 20 and data[inner + 9] == IPPROTO_UDP
+                and len(data) >= udp_at + 4):
             src_port, dst_port = struct.unpack_from("!HH", data, udp_at)
 
     return IcmpPacket(icmp_type, icmp_code, src_port, dst_port)

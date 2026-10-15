@@ -65,13 +65,22 @@ class TcpReply(NamedTuple):
 
 
 def parse_reply(data: bytes) -> TcpReply:
-    """ValueError if the packet lacks a full IP + 20-byte TCP header."""
+    """ValueError on truncated data or a malformed IP/TCP header length."""
     if len(data) < 20:
         raise ValueError(f"packet too short: {len(data)} bytes")
     ihl = (data[0] & 0x0F) * 4  # parse IHL
+    if ihl < 20:
+        raise ValueError(
+            f"invalid IP header length {ihl} in {len(data)}-byte packet"
+        )
     if len(data) < ihl + 20:
         raise ValueError(f"truncated TCP header in {len(data)}-byte packet")
     ttl = data[8]                             # IP header byte 8
+    tcp_offset = (data[ihl + 12] >> 4) * 4    # TCP data offset, 32-bit words
+    if tcp_offset < TCP_HEADER_LEN:
+        raise ValueError(
+            f"invalid TCP data offset {tcp_offset} in {len(data)}-byte packet"
+        )
     flags = data[ihl + 13]
     (window,) = struct.unpack_from("!H", data, ihl + 14)
     return TcpReply(ttl, window, flags)

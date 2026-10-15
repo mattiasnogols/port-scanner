@@ -20,8 +20,12 @@ HELP_FLAGS = {"--help", "-h"}
 
 
 class CliError(Exception):
+    pass
+
 
 class ShowHelp(Exception):
+    pass
+
 
 @dataclass(frozen=True)
 class Config:
