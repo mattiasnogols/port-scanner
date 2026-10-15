@@ -20,12 +20,8 @@ HELP_FLAGS = {"--help", "-h"}
 
 
 class CliError(Exception):
-    """Invalid CLI input"""
-
 
 class ShowHelp(Exception):
-    """--help/-h"""
-
 
 @dataclass(frozen=True)
 class Config:
@@ -41,6 +37,8 @@ def parse_args(argv: List[str]) -> Config:
     """Parse CLI arguments into a Config."""
     if not argv:
         raise CliError("no arguments given")
+    if any(arg in HELP_FLAGS for arg in argv):
+        raise ShowHelp()
 
     target: Optional[str] = None
     port_spec: Optional[str] = None
@@ -50,8 +48,6 @@ def parse_args(argv: List[str]) -> Config:
     i = 0
     while i < len(argv):
         arg = argv[i]
-        if arg in HELP_FLAGS:
-            raise ShowHelp()
         if arg == "-p":
             if port_spec is not None:
                 raise CliError(
@@ -107,9 +103,11 @@ def parse_ports(spec: str) -> List[int]:
                 f"empty port entry in '{spec}' (e.g. a trailing or double comma)"
             )
         if "-" in part:
-            start_s, _, end_s = part.partition("-")
-            start = _port_number(start_s.strip(), spec)
-            end = _port_number(end_s.strip(), spec)
+            fields = [field.strip() for field in part.split("-")]
+            if len(fields) != 2 or not all(fields):
+                raise ValueError(f"invalid port '{part}' in '{spec}' (not a number)")
+            start = _port_number(fields[0], spec)
+            end = _port_number(fields[1], spec)
             if start > end:
                 raise ValueError(
                     f"invalid port range '{part}' (start {start} > end {end})"
@@ -136,11 +134,14 @@ def _flag_value(argv: List[str], i: int, flag: str, what: str) -> str:
     value = argv[i + 1]
     if not value.strip():
         raise CliError(f"{flag} requires a {what} after it (got an empty value)")
+    if value.startswith("-"):
+        # Never swallow another flag as a value (e.g. -p -tcp or -f -tcp).
+        raise CliError(f"{flag} requires a {what} after it (got option '{value}')")
     return value
 
 
 def _validate_target(raw: str) -> str:
-    """Validate an IPv4 target address; raise CliError with a specific message."""
+    """raise CliError with a specific message."""
     try:
         ipaddress.IPv4Address(raw)
     except ValueError:
