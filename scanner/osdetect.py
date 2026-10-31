@@ -3,7 +3,7 @@
 IPv4 reply leaks the initial TTL and the TCP window; turn that pair into a OS guess.
 """
 
-from typing import Dict, FrozenSet, NamedTuple, Optional
+from typing import Dict, FrozenSet, Iterable, NamedTuple, Optional, Tuple
 
 CANONICAL_TTLS = (64, 128, 255)
 
@@ -56,6 +56,18 @@ class Fingerprint(NamedTuple):
     confidence: str
 
 
+class OsGuess(NamedTuple):
+    os_guess: str
+    confidence: str
+    ttl: Optional[int]
+    window: Optional[int]
+
+NO_REPLY = OsGuess(UNKNOWN, LOW, None, None)
+
+# detect_os() ranking: stronger confidence first, then a known family over Unknown.
+_CONFIDENCE_RANK = {MODERATE: 1, LOW: 0}
+
+
 def canonical_ttl(ttl: Optional[int]) -> Optional[int]:
     """Round an observed TTL up to the nearest initial TTL (64/128/255).
 
@@ -105,6 +117,24 @@ def fingerprint(
         # The window fits both desktop families
         return Fingerprint(family, MODERATE)
     return Fingerprint(family, LOW)
+
+
+def detect_os(replies: Iterable[Tuple[int, int]]) -> OsGuess:
+    """Pick the strongest fingerprint from (ttl, window) reply pairs.
+
+    Moderate beats low; a known family beats Unknown at the same
+    confidence."""
+
+    best = NO_REPLY
+    best_rank = (-1, False)
+    for ttl, window in replies:
+        guess = fingerprint(ttl, window)
+        rank = (_CONFIDENCE_RANK.get(guess.confidence, 0),
+                guess.os_guess != UNKNOWN)
+        if rank > best_rank:
+            best = OsGuess(guess.os_guess, guess.confidence, ttl, window)
+            best_rank = rank
+    return best
 
 
 def _valid_ttl(ttl: Optional[int]) -> bool:

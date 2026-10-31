@@ -1,8 +1,8 @@
 # port-scanner
 
 CLI port scanner in Python 3. It performs TCP connect, UDP, and stealth SYN scans over single ports or ranges;
-`-sv` adds service/version detection on open TCP ports. The raw-socket scans (`-udp`, `-s`) are Linux-specific,
-require root.
+`-sv` adds service/version detection on open TCP ports, and `-os` adds TTL/TCP-window OS fingerprinting to
+the stealth scan. The raw-socket scans (`-udp`, `-s`) are Linux-specific, require root.
 
 **This tool is created for educational purposes only. Only scan networks you own or have explicit
 authorization to test.**
@@ -16,6 +16,7 @@ authorization to test.**
         packets.py     TCP/IP byte layer
         output.py      terminal + file reporting (-f)
         services.py    service/version identification (-sv)
+        osdetect.py    TTL/TCP-window OS fingerprinting (-os)
         scanners/
             tcp_connect.py   full-handshake TCP scan
             udp.py           UDP probe + ICMP error matching
@@ -36,6 +37,7 @@ Python 3.8+:
         -s      Perform stealth scan
         -f      Save output to file (provide filename after flag)
         -sv     Identify services and versions on open ports
+        -os     Guess the OS from SYN reply TTL/window (requires -s)
 
     Example:
     $ python3 port_scanner.py 127.0.0.1 -p 22,80,12345 -tcp -f scan_results.txt
@@ -56,6 +58,19 @@ Python 3.8+:
 Silent services use the port table. TLS ports get a real TLS handshake and an HTTP request where
 appropriate; unknown TLS ports report `ssl`. `-udp -sv` is rejected, and `-s -sv` adds a handshake
 on open ports.
+
+## OS detection (-os)
+
+`-os` adds a TTL/TCP-window fingerprint to a stealth scan, so it requires `-s`.
+
+    $ sudo python3 port_scanner.py 192.168.1.10 -p 22,80 -s -os
+    Scanning (stealth) 192.168.1.10...
+    Port 22: Open
+    Port 80: Closed
+    OS guess: Linux (TTL=64, window=5840, confidence: moderate)
+
+The guess rounds TTL up to a likely initial value (64/128/255) and compares the TCP window against
+typical Linux, Windows, and network-gear values. 
 
 ## Port states
 

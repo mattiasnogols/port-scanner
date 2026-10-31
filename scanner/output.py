@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from scanner.osdetect import OsGuess
 from scanner.services import UNKNOWN, ServiceInfo
 
 # The stealth scan is the only tagged in the header
@@ -42,6 +43,16 @@ def result_lines(
     return lines
 
 
+def os_line(info: Optional[OsGuess]) -> Optional[str]:
+    """The optional -os line."""
+    if info is None:
+        return None
+    if info.ttl is None or info.window is None:
+        return f"OS guess: {info.os_guess} (no reply)"
+    return (f"OS guess: {info.os_guess} (TTL={info.ttl}, "
+            f"window={info.window}, confidence: {info.confidence})")
+
+
 def format_file_body(lines: List[str], when: Optional[datetime] = None) -> str:
     when = datetime.now() if when is None else when
     header = f"# Scan date: {when.strftime(TIMESTAMP_FORMAT)}"
@@ -73,11 +84,15 @@ def save_results(name: str, lines: List[str]) -> str:
 
 def report(target: str, scan_type: str, results: Dict[int, str],
            outfile: Optional[str] = None,
-           services: Optional[Dict[int, ServiceInfo]] = None) -> Optional[str]:
+           services: Optional[Dict[int, ServiceInfo]] = None,
+           os_info: Optional[OsGuess] = None) -> Optional[str]:
     """Render the scan: terminal lines, then the file when -f was given.
        Returns the path written, or None without -f.
     """
     lines = [scan_header(target, scan_type)] + result_lines(results, services)
+    guess = os_line(os_info)
+    if guess is not None:
+        lines.append(guess)
     for line in lines:
         print(line)
     if outfile is None:

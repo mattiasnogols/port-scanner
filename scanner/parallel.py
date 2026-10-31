@@ -1,8 +1,9 @@
 """Thread-pool scanning: run any scanner's scan_port over many ports."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Callable, Dict, Iterable
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
+from scanner import packets
 from scanner.scanners import NeedsRootError
 
 MAX_WORKERS = 100
@@ -11,10 +12,13 @@ MAX_WORKERS = 100
 FALLBACK_STATE = "Filtered"
 
 
-class ScanInterrupted(KeyboardInterrupt):
-    """Ctrl+C during scan_ports()"""
+ScanMeta = Tuple[str, Optional[packets.TcpReply]]
 
-    def __init__(self, results: Dict[int, str]):
+
+class ScanInterrupted(KeyboardInterrupt):
+    """Ctrl+C during a pooled scan; carries whatever finished."""
+
+    def __init__(self, results: Dict[int, Any]):
         super().__init__("scan interrupted")
         self.results = results
 
@@ -25,13 +29,35 @@ def scan_ports(
     ports: Iterable[int],
     max_workers: int = MAX_WORKERS,
 ) -> Dict[int, str]:
-    """Scan ports on ip with a thread pool; returns {port: state}."""
+    """Scan ports on ip with a thread pool."""
+    return _scan_ports(scan_fn, ip, ports, max_workers, FALLBACK_STATE)
+
+
+def scan_ports_with_meta(
+    scan_fn: Callable[..., ScanMeta],
+    ip: str,
+    ports: Iterable[int],
+    max_workers: int = MAX_WORKERS,
+) -> Dict[int, ScanMeta]:
+    """Scan with a metadata scanner."""
+    return _scan_ports(scan_fn, ip, ports, max_workers,
+                       (FALLBACK_STATE, None))
+
+
+def _scan_ports(
+    scan_fn: Callable[..., Any],
+    ip: str,
+    ports: Iterable[int],
+    max_workers: int,
+    failure: Any,
+) -> Dict[int, Any]:
+    """Shared pool: run scan_fn and collect one result per port."""
     port_list = list(ports)
     if not port_list:
         return {}
     # A handful of ports must not spin up 100 idle threads.
     workers = min(max_workers, len(port_list))
-    results: Dict[int, str] = {}
+    results: Dict[int, Any] = {}
     pool = ThreadPoolExecutor(max_workers=workers)
     try:
         futures = {pool.submit(scan_fn, ip, port): port for port in port_list}
@@ -44,7 +70,7 @@ def scan_ports(
                 raise
             except Exception:
                 # Isolate an unexpected failure
-                results[port] = FALLBACK_STATE
+                results[port] = failure
     except KeyboardInterrupt:
         pool.shutdown(wait=False, cancel_futures=True)
         raise ScanInterrupted(results) from None

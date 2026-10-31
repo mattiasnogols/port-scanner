@@ -12,7 +12,8 @@ OPTIONS:
     -f      Save output to file (provide filename after flag)
 
 EXTRA OPTIONS:
-    -sv     Identify services and versions on open ports"""
+    -sv     Identify services and versions on open ports
+    -os     Guess the OS from SYN reply TTL/window (requires -s)"""
 
 MIN_PORT = 1
 MAX_PORT = 65535
@@ -20,6 +21,7 @@ MAX_PORT = 65535
 PROTOCOL_FLAGS = {"-tcp": "tcp", "-udp": "udp", "-s": "syn"}
 DEFAULT_SCAN_TYPE = "tcp"
 SERVICE_FLAG = "-sv"
+OS_FLAG = "-os"
 HELP_FLAGS = {"--help", "-h"}
 
 
@@ -40,6 +42,7 @@ class Config:
     scan_type: str
     outfile: Optional[str]
     service_detection: bool = False
+    os_detection: bool = False
 
 
 def parse_args(argv: List[str]) -> Config:
@@ -53,6 +56,7 @@ def parse_args(argv: List[str]) -> Config:
     port_spec: Optional[str] = None
     outfile: Optional[str] = None
     service_detection = False
+    os_detection = False
     scan_flags: List[str] = []
 
     i = 0
@@ -74,6 +78,8 @@ def parse_args(argv: List[str]) -> Config:
             continue
         if arg == SERVICE_FLAG:
             service_detection = True
+        elif arg == OS_FLAG:
+            os_detection = True
         elif arg in PROTOCOL_FLAGS:
             scan_flags.append(arg)
         elif arg.startswith("-"):
@@ -94,6 +100,10 @@ def parse_args(argv: List[str]) -> Config:
             "(choose exactly one of -tcp, -udp, -s)"
         )
     scan_type = PROTOCOL_FLAGS[scan_flags[0]] if scan_flags else DEFAULT_SCAN_TYPE
+    if os_detection and scan_type != "syn":
+        raise CliError(
+            "OS detection (-os) requires a stealth SYN scan (-s)"
+        )
     if service_detection and scan_type == "udp":
         raise CliError(
             "service detection (-sv) requires a TCP-based scan (not -udp)"
@@ -105,7 +115,8 @@ def parse_args(argv: List[str]) -> Config:
     except ValueError as exc:
         raise CliError(f"invalid -p value: {exc}") from None
     return Config(target=target, ports=ports, scan_type=scan_type,
-                  outfile=outfile, service_detection=service_detection)
+                  outfile=outfile, service_detection=service_detection,
+                  os_detection=os_detection)
 
 
 def parse_ports(spec: str) -> List[int]:
