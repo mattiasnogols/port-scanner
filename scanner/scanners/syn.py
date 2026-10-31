@@ -3,9 +3,6 @@
 We craft the SYN ourselves (scanner/packets.py) on a raw socket and never
 complete the handshake, so the target's application never sees a connection:
 
-    SYN+ACK reply -> Open      (RST'd away as a courtesy; rarely logged)
-    RST reply     -> Closed    (the kernel rejected: nothing listening)
-    silence       -> Filtered  (a firewall dropped the SYN)
 
 Needs root at runtime (raw sockets are root-only on Linux).
 
@@ -15,7 +12,7 @@ Interface (see scanner/scanners/__init__.py):
 import socket
 import struct
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 from scanner import packets
 from scanner.scanners import NeedsRootError
@@ -34,7 +31,24 @@ OPEN_REPLY = packets.SYN | packets.ACK
 
 
 def scan_port(ip: str, port: int, timeout: float = DEFAULT_TIMEOUT) -> str:
-    """Probe ip:port with a hand-crafted SYN: OPEN, CLOSED, or FILTERED."""
+    """Probe ip:port with a hand-crafted SYN: OPEN, CLOSED, or FILTERED.
+
+    call scan_port_with_meta() when the reply's TTL/window is needed."""
+    state, _ = scan_port_with_meta(ip, port, timeout)
+    return state
+
+
+def scan_port_with_meta(
+    ip: str,
+    port: int,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> Tuple[str, Optional[packets.TcpReply]]:
+    """Probe ip:port and keep the reply that decided the state.
+
+    Returns (state, reply): a SYN+ACK for OPEN or an RST for CLOSED,
+    carrying the IP TTL and TCP window OS detection fingerprints. reply
+    is None for FILTERED (no answer, or the probe could not be sent).
+    """
     try:
         raw = socket.socket(socket.AF_INET, socket.SOCK_RAW,
                             socket.IPPROTO_TCP)
@@ -45,26 +59,23 @@ def scan_port(ip: str, port: int, timeout: float = DEFAULT_TIMEOUT) -> str:
     seq = packets.random_seq()
     try:
         try:
-            # The kernel builds the IP header (no IP_HDRINCL), but the
-            # pseudo-header checksum must carry the source address the
-            # kernel will actually route by — hence _local_ip().
             src_ip = _local_ip(ip)
             syn = packets.build_tcp_header(src_ip, ip, src_port, port, seq,
                                            packets.SYN)
             raw.sendto(syn, (ip, 0))
         except OSError:
             # No route, etc: like tcp_connect, a failed send counts as silence
-            return FILTERED
+            return FILTERED, None
         deadline = time.monotonic() + timeout
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return FILTERED  # full timeout with no answer to our SYN
+                return FILTERED, None  # full timeout with no answer to our SYN
             raw.settimeout(remaining)
             try:
                 data, peer = raw.recvfrom(65535)
             except socket.timeout:
-                return FILTERED
+                return FILTERED, None
             except OSError:
                 continue  # transient recv error: wait out the deadline
             reply = _our_reply(data, peer[0], ip, src_port, port)
@@ -72,9 +83,9 @@ def scan_port(ip: str, port: int, timeout: float = DEFAULT_TIMEOUT) -> str:
                 continue
             if (reply.flags & OPEN_REPLY) == OPEN_REPLY:
                 _send_rst(raw, src_ip, ip, src_port, port, seq)
-                return OPEN
+                return OPEN, reply
             if reply.flags & packets.RST:
-                return CLOSED
+                return CLOSED, reply
             # Anything else (a bare ACK, say) doesn't answer our SYN:
             # keep waiting.
     finally:
@@ -82,12 +93,9 @@ def scan_port(ip: str, port: int, timeout: float = DEFAULT_TIMEOUT) -> str:
 
 
 def _local_ip(ip: str) -> str:
-    """Source address the kernel will use to reach *ip*.
+    """Source address the kernel will use to reach ip.
 
-    The UDP-connect trick sends nothing: connect() on a datagram socket
-    only forces the routing decision, and getsockname() then reveals the
-    source address our packets will carry. The pseudo-header checksum
-    must be built with exactly that address or the target rejects the SYN.
+    The pseudo-header checksum must be built with exactly that address or the target rejects the SYN.
     """
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -99,12 +107,11 @@ def _local_ip(ip: str) -> str:
 
 def _our_reply(data: bytes, peer_ip: str, ip: str, src_port: int,
                port: int) -> Optional[packets.TcpReply]:
-    """The parsed reply if *data* answers our probe, else None.
+    """The parsed reply if data answers our probe, else None.
 
     A raw socket sees every TCP packet the kernel receives, so a packet
     only counts when it comes from the target and its port pair mirrors
-    ours exactly (their source = the probed port, their dest = our
-    random source port).
+    ours exactly
     """
     if peer_ip != ip:
         return None
@@ -112,8 +119,6 @@ def _our_reply(data: bytes, peer_ip: str, ip: str, src_port: int,
         reply = packets.parse_reply(data)
     except ValueError:
         return None  # truncated junk: ignore, never fatal
-    # Safe to unpack: parse_reply just validated a full IP + 20-byte TCP
-    # header. IHL parsed, not assumed — IP options shift the TCP header.
     their_src, their_dst = struct.unpack_from("!HH", data,
                                               (data[0] & 0x0F) * 4)
     if (their_src, their_dst) != (port, src_port):
