@@ -1,10 +1,20 @@
 """Service and version identification for open ports (-sv)."""
 
 import re
+import socket
 from functools import lru_cache
 from typing import Dict, Iterable, NamedTuple, Optional
 
 UNKNOWN = "unknown"
+OPEN_STATE = "Open"
+
+# Banner-grab: one short timeout per socket operation.
+GRAB_TIMEOUT = 1.0
+BANNER_SIZE = 1024
+
+HTTP_PORTS = {80, 8000, 8008, 8080, 8081, 8888}
+HTTPS_PORTS = {443, 465, 993, 995, 8443}
+HTTP_PROBE = b"GET / HTTP/1.0\r\n\r\n"
 
 # Common TCP services; everything else falls back to /etc/services.
 PORT_SERVICES = {
@@ -133,3 +143,51 @@ def _identify_http(text: str) -> Optional[ServiceInfo]:
         if match:
             return ServiceInfo(service, match.group(1))
     return ServiceInfo("http", None)
+
+
+def grab_banner(ip: str, port: int,
+                timeout: float = GRAB_TIMEOUT) -> Optional[str]:
+    """Read a service banner from an open TCP port; None on any failure."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(timeout)
+        if sock.connect_ex((ip, port)) != 0:
+            return None
+        timed_out = False
+        try:
+            data = sock.recv(BANNER_SIZE)
+        except socket.timeout:
+            data = b""
+            timed_out = True
+        if timed_out and port in HTTP_PORTS:
+            sock.sendall(HTTP_PROBE)
+            data = sock.recv(BANNER_SIZE)
+        if not data:
+            return None
+        return data.decode("utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    finally:
+        sock.close()
+
+
+def detect_services(ip: str, results: Dict[int, str],
+                    timeout: float = GRAB_TIMEOUT) -> Dict[int, ServiceInfo]:
+    """Identify services on Open ports; never changes a port's state.
+    Open ports are usually few, so probes run sequentially.
+    """
+    found: Dict[int, ServiceInfo] = {}
+    for port in sorted(results):
+        if results[port] != OPEN_STATE:
+            continue
+        fallback = None
+        try:
+            fallback = service_name(port)
+            banner = grab_banner(ip, port, timeout)
+            info = identify(banner) if banner else ServiceInfo(UNKNOWN, None)
+            if info.service == UNKNOWN and fallback:
+                info = ServiceInfo(fallback, None)
+            found[port] = info
+        except Exception:
+            found[port] = ServiceInfo(fallback or UNKNOWN, None)
+    return found
