@@ -51,8 +51,11 @@ Python 3.8+:
 
     Port 22: Open (ssh — 8.9p1)
     Port 80: Open (http)
+    Port 443: Open (https — 2.4.52)
 
-Silent services use the port table; TLS ports are not probed, `-udp -sv` is rejected, and `-s -sv` adds a handshake on open ports.
+Silent services use the port table. TLS ports get a real TLS handshake and an HTTP request where
+appropriate; unknown TLS ports report `ssl`. `-udp -sv` is rejected, and `-s -sv` adds a handshake
+on open ports.
 
 ## Port states
 

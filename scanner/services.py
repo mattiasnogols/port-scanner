@@ -2,8 +2,13 @@
 
 import re
 import socket
+import ssl
+import warnings
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from typing import Dict, Iterable, NamedTuple, Optional
+
+from scanner.parallel import MAX_WORKERS
 
 UNKNOWN = "unknown"
 OPEN_STATE = "Open"
@@ -13,7 +18,13 @@ GRAB_TIMEOUT = 1.0
 BANNER_SIZE = 1024
 
 HTTP_PORTS = {80, 8000, 8008, 8080, 8081, 8888}
-HTTPS_PORTS = {443, 465, 993, 995, 8443}
+# Common TLS-first ports. HTTP_TLS_PORTS get an HTTP request after the
+# handshake; the rest are read passively (SMTPS, IMAPS, POP3S, ...).
+TLS_PORTS = {
+    443, 465, 636, 853, 989, 990, 992, 993, 995,
+    4443, 5061, 5986, 8443, 8883, 9443, 10443,
+}
+HTTP_TLS_PORTS = {443, 4443, 5986, 8443, 9443, 10443}
 HTTP_PROBE = b"GET / HTTP/1.0\r\n\r\n"
 
 # Common TCP services; everything else falls back to /etc/services.
@@ -145,23 +156,65 @@ def _identify_http(text: str) -> Optional[ServiceInfo]:
     return ServiceInfo("http", None)
 
 
+def _tls_context() -> ssl.SSLContext:
+    """Client context for scanning: TLS, no certificate verification."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        context.minimum_version = ssl.TLSVersion.TLSv1
+    return context
+
+
+def grab_tls_banner(ip: str, port: int,
+                    timeout: float = GRAB_TIMEOUT) -> Optional[str]:
+    """Real TLS handshake, then an application banner.
+
+    Returns the banner, "" when TLS succeeds but the service is silent,
+    or None when the handshake fails.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    tls = None
+    try:
+        sock.settimeout(timeout)
+        if sock.connect_ex((ip, port)) != 0:
+            return None
+        context = _tls_context()
+        tls = context.wrap_socket(sock, server_hostname=ip)
+        try:
+            if port in HTTP_TLS_PORTS:
+                tls.sendall(HTTP_PROBE)
+            data = tls.recv(BANNER_SIZE)
+        except OSError:
+            return ""
+        if not data:
+            return ""
+        return data.decode("utf-8", errors="replace").strip()
+    except (OSError, ValueError):
+        return None
+    finally:
+        if tls is not None:
+            try:
+                tls.close()
+            except OSError:
+                pass
+        sock.close()
+
+
 def grab_banner(ip: str, port: int,
                 timeout: float = GRAB_TIMEOUT) -> Optional[str]:
-    """Read a service banner from an open TCP port; None on any failure."""
+    """Read a service banner"""
+    if port in TLS_PORTS:
+        return grab_tls_banner(ip, port, timeout)
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.settimeout(timeout)
         if sock.connect_ex((ip, port)) != 0:
             return None
-        timed_out = False
-        try:
-            data = sock.recv(BANNER_SIZE)
-        except socket.timeout:
-            data = b""
-            timed_out = True
-        if timed_out and port in HTTP_PORTS:
+        if port in HTTP_PORTS:
             sock.sendall(HTTP_PROBE)
-            data = sock.recv(BANNER_SIZE)
+        data = sock.recv(BANNER_SIZE)
         if not data:
             return None
         return data.decode("utf-8", errors="replace").strip()
@@ -171,23 +224,44 @@ def grab_banner(ip: str, port: int,
         sock.close()
 
 
-def detect_services(ip: str, results: Dict[int, str],
-                    timeout: float = GRAB_TIMEOUT) -> Dict[int, ServiceInfo]:
-    """Identify services on Open ports; never changes a port's state.
-    Open ports are usually few, so probes run sequentially.
-    """
-    found: Dict[int, ServiceInfo] = {}
-    for port in sorted(results):
-        if results[port] != OPEN_STATE:
-            continue
-        fallback = None
-        try:
-            fallback = service_name(port)
-            banner = grab_banner(ip, port, timeout)
-            info = identify(banner) if banner else ServiceInfo(UNKNOWN, None)
-            if info.service == UNKNOWN and fallback:
-                info = ServiceInfo(fallback, None)
-            found[port] = info
-        except Exception:
-            found[port] = ServiceInfo(fallback or UNKNOWN, None)
-    return found
+def _detect_port(ip: str, port: int, timeout: float) -> ServiceInfo:
+    fallback = None
+    try:
+        fallback = service_name(port)
+        banner = grab_banner(ip, port, timeout)
+        if banner is None:
+            return ServiceInfo(fallback or UNKNOWN, None)
+        info = identify(banner) if banner else ServiceInfo(UNKNOWN, None)
+        if port in TLS_PORTS:
+            if fallback:
+                return ServiceInfo(fallback, info.version)
+            if info.service == UNKNOWN:
+                return ServiceInfo("ssl", None)
+            return ServiceInfo(
+                "https" if info.service == "http" else info.service,
+                info.version,
+            )
+        if info.service == UNKNOWN and fallback:
+            return ServiceInfo(fallback, None)
+        return info
+    except Exception:
+        return ServiceInfo(fallback or UNKNOWN, None)
+
+
+def detect_services(
+    ip: str,
+    results: Dict[int, str],
+    timeout: float = GRAB_TIMEOUT,
+    max_workers: int = MAX_WORKERS,
+) -> Dict[int, ServiceInfo]:
+    """Identify services on Open ports concurrently."""
+    open_ports = [p for p in sorted(results) if results[p] == OPEN_STATE]
+    if not open_ports:
+        return {}
+    workers = min(max_workers, len(open_ports))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            port: pool.submit(_detect_port, ip, port, timeout)
+            for port in open_ports
+        }
+        return {port: futures[port].result() for port in open_ports}
