@@ -70,7 +70,7 @@ on open ports.
     OS guess: Linux (TTL=64, window=5840, confidence: moderate)
 
 The guess rounds TTL up to a likely initial value (64/128/255) and compares the TCP window against
-typical Linux, Windows, and network-gear values. 
+typical Linux, Windows, and network-gear values.
 
 ## Port states
 
@@ -78,3 +78,11 @@ typical Linux, Windows, and network-gear values.
     Closed         host reachable, nothing listening
     Filtered       a firewall dropped the probe
     Open|Filtered  quiet service and firewall are indistinguishable
+
+## License
+
+Released under the [MIT License](LICENSE).
+
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Mattias_N%C3%B5gols-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/mattias-n%C3%B5gols)
+[![GitHub](https://img.shields.io/badge/GitHub-mattiasnogols-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/mattiasnogols)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](https://opensource.org/licenses/MIT)
