@@ -9,13 +9,17 @@ OPTIONS:
     -tcp    Perform TCP scan
     -udp    Perform UDP scan
     -s      Perform stealth scan
-    -f      Save output to file (provide filename after flag)"""
+    -f      Save output to file (provide filename after flag)
+
+EXTRA OPTIONS:
+    -sv     Identify services and versions on open ports"""
 
 MIN_PORT = 1
 MAX_PORT = 65535
 
 PROTOCOL_FLAGS = {"-tcp": "tcp", "-udp": "udp", "-s": "syn"}
 DEFAULT_SCAN_TYPE = "tcp"
+SERVICE_FLAG = "-sv"
 HELP_FLAGS = {"--help", "-h"}
 
 
@@ -35,6 +39,7 @@ class Config:
     ports: List[int]
     scan_type: str
     outfile: Optional[str]
+    service_detection: bool = False
 
 
 def parse_args(argv: List[str]) -> Config:
@@ -47,6 +52,7 @@ def parse_args(argv: List[str]) -> Config:
     target: Optional[str] = None
     port_spec: Optional[str] = None
     outfile: Optional[str] = None
+    service_detection = False
     scan_flags: List[str] = []
 
     i = 0
@@ -55,7 +61,7 @@ def parse_args(argv: List[str]) -> Config:
         if arg == "-p":
             if port_spec is not None:
                 raise CliError(
-                    "duplicate -p flag (combine ports in one spec, e.g. -p 22,80-90)"
+                    "duplicate -p flag"
                 )
             port_spec = _flag_value(argv, i, "-p", "port specification")
             i += 2
@@ -66,7 +72,9 @@ def parse_args(argv: List[str]) -> Config:
             outfile = _flag_value(argv, i, "-f", "filename")
             i += 2
             continue
-        if arg in PROTOCOL_FLAGS:
+        if arg == SERVICE_FLAG:
+            service_detection = True
+        elif arg in PROTOCOL_FLAGS:
             scan_flags.append(arg)
         elif arg.startswith("-"):
             raise CliError(f"unknown option '{arg}'")
@@ -86,13 +94,18 @@ def parse_args(argv: List[str]) -> Config:
             "(choose exactly one of -tcp, -udp, -s)"
         )
     scan_type = PROTOCOL_FLAGS[scan_flags[0]] if scan_flags else DEFAULT_SCAN_TYPE
+    if service_detection and scan_type == "udp":
+        raise CliError(
+            "service detection (-sv) requires a TCP-based scan (not -udp)"
+        )
     if port_spec is None:
         raise CliError("no ports specified (use -p, e.g. -p 22,80 or -p 20-25)")
     try:
         ports = parse_ports(port_spec)
     except ValueError as exc:
         raise CliError(f"invalid -p value: {exc}") from None
-    return Config(target=target, ports=ports, scan_type=scan_type, outfile=outfile)
+    return Config(target=target, ports=ports, scan_type=scan_type,
+                  outfile=outfile, service_detection=service_detection)
 
 
 def parse_ports(spec: str) -> List[int]:

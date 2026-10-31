@@ -4,7 +4,7 @@
 import sys
 from typing import List, Optional
 
-from scanner import parallel
+from scanner import parallel, services
 from scanner.cli import USAGE, CliError, Config, ShowHelp, parse_args
 from scanner.output import OutputError, report
 from scanner.scanners import NeedsRootError, syn, tcp_connect, udp
@@ -50,7 +50,10 @@ def _run(config: Config) -> int:
     try:
         results = parallel.scan_ports(module.scan_port, config.target,
                                       config.ports)
-        report(config.target, config.scan_type, results, config.outfile)
+        detected = (services.detect_services(config.target, results)
+                    if config.service_detection else None)
+        report(config.target, config.scan_type, results, config.outfile,
+               detected)
     except parallel.ScanInterrupted as exc:
         # Ctrl+C mid-scan: render whatever finished
         if not exc.results:

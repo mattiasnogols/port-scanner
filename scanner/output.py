@@ -7,6 +7,8 @@ import os
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from scanner.services import UNKNOWN, ServiceInfo
+
 # The stealth scan is the only tagged in the header
 STEALTH_LABEL = " (stealth)"
 
@@ -22,8 +24,22 @@ def scan_header(target: str, scan_type: str) -> str:
     return f"Scanning{label} {target}..."
 
 
-def result_lines(results: Dict[int, str]) -> List[str]:
-    return [f"Port {port}: {results[port]}" for port in sorted(results)]
+def result_lines(
+    results: Dict[int, str],
+    services: Optional[Dict[int, ServiceInfo]] = None,
+) -> List[str]:
+    """One line per port, sorted; -sv adds a service/version suffix."""
+    lines = []
+    for port in sorted(results):
+        line = f"Port {port}: {results[port]}"
+        info = services.get(port) if services else None
+        if info is not None and info.service and info.service != UNKNOWN:
+            if info.version:
+                line += f" ({info.service} — {info.version})"
+            else:
+                line += f" ({info.service})"
+        lines.append(line)
+    return lines
 
 
 def format_file_body(lines: List[str], when: Optional[datetime] = None) -> str:
@@ -56,12 +72,12 @@ def save_results(name: str, lines: List[str]) -> str:
 
 
 def report(target: str, scan_type: str, results: Dict[int, str],
-           outfile: Optional[str] = None) -> Optional[str]:
+           outfile: Optional[str] = None,
+           services: Optional[Dict[int, ServiceInfo]] = None) -> Optional[str]:
     """Render the scan: terminal lines, then the file when -f was given.
-
        Returns the path written, or None without -f.
     """
-    lines = [scan_header(target, scan_type)] + result_lines(results)
+    lines = [scan_header(target, scan_type)] + result_lines(results, services)
     for line in lines:
         print(line)
     if outfile is None:
